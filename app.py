@@ -410,9 +410,6 @@ def strategy_text(symbols: list[str]) -> str:
     return "\n".join(lines)
 
 
-# Auto refresh every 2 seconds
-st.markdown("<meta http-equiv='refresh' content='2'>", unsafe_allow_html=True)
-
 if "cfg" not in st.session_state:
     st.session_state.cfg = load_config()
 if "current_symbol" not in st.session_state:
@@ -421,8 +418,8 @@ if "current_symbol" not in st.session_state:
 cfg = st.session_state.cfg
 
 st.title("TW / US AI Stock Dashboard")
-st.markdown("<div class='small'>LIVE DARK · 手機可開 · 2秒刷新 · 台股 / 美股 / ETF · 圖像化解讀</div>", unsafe_allow_html=True)
-st.caption(f"更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}｜注意：yfinance 台股常有 15～20 分鐘延遲。")
+st.markdown("<div class='small'>LIVE DARK · 手機可開 · 數字局部2秒刷新 · 台股 / 美股 / ETF · 圖像化解讀</div>", unsafe_allow_html=True)
+st.caption("頁面本身不整頁刷新；只有大盤、自選股與即時數字區塊會局部更新。")
 
 with st.sidebar:
     st.header("自選股設定")
@@ -453,54 +450,72 @@ with st.sidebar:
     if selected_symbol:
         st.session_state.current_symbol = normalize_symbol(selected_symbol)
 
-st.subheader("大盤即時追蹤")
-market_df = build_snapshot_table(list(MARKETS.values()))
-market_df.insert(0, "市場", list(MARKETS.keys()))
-st.dataframe(market_df, use_container_width=True, hide_index=True)
 
-st.subheader(f"{page} 自選股")
-watch_df = build_snapshot_table(cfg["pages"].get(page, []))
-st.dataframe(watch_df, use_container_width=True, hide_index=True)
+# 只刷新數字區塊，不刷新整個頁面。
+# st.fragment 會讓這個區塊每 2 秒局部重跑，圖表與頁面框架不會整頁跳動。
+@st.fragment(run_every=2)
+def live_number_panel(page_name: str, selected_symbol: str):
+    st.subheader("大盤即時追蹤")
+    st.caption(f"數字更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}｜注意：yfinance 台股常有 15～20 分鐘延遲。")
 
-symbol = st.session_state.current_symbol
-snap = get_snapshot(symbol)
+    market_df = build_snapshot_table(list(MARKETS.values()))
+    market_df.insert(0, "市場", list(MARKETS.keys()))
+    st.dataframe(market_df, use_container_width=True, hide_index=True)
 
-st.subheader(f"圖像化看盤：{symbol}")
-if not snap:
-    st.warning("目前抓不到資料，可能是代號錯誤、資料源暫時無回應，或市場資料尚未更新。")
-else:
+    st.subheader(f"{page_name} 自選股")
+    watch_df = build_snapshot_table(cfg["pages"].get(page_name, []))
+    st.dataframe(watch_df, use_container_width=True, hide_index=True)
+
+    snap_live = get_snapshot(selected_symbol)
+    st.subheader(f"即時數字：{selected_symbol}")
+    if not snap_live:
+        st.warning("目前抓不到資料，可能是代號錯誤、資料源暫時無回應，或市場資料尚未更新。")
+        return
+
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("價格", fmt_num(snap["price"]), fmt_num(snap["change"]))
-    kpi2.metric("漲跌%", fmt_pct(snap["pct"]))
-    kpi3.metric("成交量", fmt_int(snap["volume"]), snap["vol_dir"])
-    kpi4.metric("狀態", simple_status(snap))
+    kpi1.metric("價格", fmt_num(snap_live["price"]), fmt_num(snap_live["change"]))
+    kpi2.metric("漲跌%", fmt_pct(snap_live["pct"]))
+    kpi3.metric("成交量", fmt_int(snap_live["volume"]), snap_live["vol_dir"])
+    kpi4.metric("狀態", simple_status(snap_live))
 
     kpi5, kpi6, kpi7, kpi8 = st.columns(4)
-    kpi5.metric("KD", f'{fmt_num(snap["K"], 1)}/{fmt_num(snap["D"], 1)}')
-    kpi6.metric("RSI", fmt_num(snap["RSI"], 1))
-    kpi7.metric("MACD Hist", fmt_num(snap["MACD_HIST"], 3))
-    kpi8.metric("30日量", snap["vol_dir"])
+    kpi5.metric("KD", f'{fmt_num(snap_live["K"], 1)}/{fmt_num(snap_live["D"], 1)}')
+    kpi6.metric("RSI", fmt_num(snap_live["RSI"], 1))
+    kpi7.metric("MACD Hist", fmt_num(snap_live["MACD_HIST"], 3))
+    kpi8.metric("30日量", snap_live["vol_dir"])
 
     st.markdown("### 人類可讀解讀")
-    for item in make_human_summary(symbol, snap):
+    for item in make_human_summary(selected_symbol, snap_live):
         st.markdown(f"- {item}")
 
-    df1y = add_indicators(fetch_history(symbol, "1y", "1d"))
-    if not df1y.empty:
-        st.plotly_chart(make_price_chart(df1y, symbol), use_container_width=True)
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.plotly_chart(make_indicator_chart(df1y), use_container_width=True)
-        with col_b:
-            st.plotly_chart(make_macd_chart(df1y), use_container_width=True)
-        st.plotly_chart(make_volume_chart(df1y), use_container_width=True)
 
-st.subheader("本機策略解讀")
-all_symbols = []
-for arr in cfg["pages"].values():
-    all_symbols.extend(arr)
-all_symbols = list(dict.fromkeys(all_symbols))
-st.text(strategy_text(all_symbols))
+symbol = st.session_state.current_symbol
+live_number_panel(page, symbol)
+
+st.subheader(f"圖表區：{symbol}")
+st.caption("圖表不每 2 秒重畫，避免手機畫面閃爍與看不到內容。切換標的或按清除快取後會重新載入圖表。")
+df1y = add_indicators(fetch_history(symbol, "1y", "1d"))
+if df1y.empty:
+    st.warning("目前抓不到圖表資料。")
+else:
+    st.plotly_chart(make_price_chart(df1y, symbol), use_container_width=True)
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.plotly_chart(make_indicator_chart(df1y), use_container_width=True)
+    with col_b:
+        st.plotly_chart(make_macd_chart(df1y), use_container_width=True)
+    st.plotly_chart(make_volume_chart(df1y), use_container_width=True)
+
+@st.fragment(run_every=10)
+def strategy_panel():
+    st.subheader("本機策略解讀")
+    all_symbols = []
+    for arr in cfg["pages"].values():
+        all_symbols.extend(arr)
+    all_symbols = list(dict.fromkeys(all_symbols))
+    st.text(strategy_text(all_symbols))
+
+strategy_panel()
 
 st.markdown("---")
 st.caption("資料來源：Yahoo Finance via yfinance。此網站僅供研究與看盤輔助，不構成投資建議。")
